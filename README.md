@@ -1,4 +1,4 @@
- # SO-101: Teleop, Cameras, Hands-Free Recording, and Dataset Visualization
+# SO-101: Teleop, Cameras, Hands-Free Recording, and Dataset Visualization
 
 Notes from getting a full teleop → record → visualize loop working on the real SO-101, plus a hands-free foot pedal setup for episode control.
 
@@ -208,7 +208,70 @@ Notes:
 - Each completed episode gets encoded with SVT-AV1 — the `Svt[info]` log lines after an episode ends are normal, not errors.
 - Hit a `ValueError: You must add one or several frames with add_frame before calling add_episode` crash once — caused by stopping (esc) right as a new, still-empty episode buffer opened. Earlier completed episodes remained safely saved; only the empty in-progress one failed. Lesson: let a couple of frames land (wait a beat after "Recording episode N" appears) before hitting the stop pedal, or stop during the reset window between episodes rather than mid-recording.
 
-## 7. Visualizing a recorded dataset
+## 7. Resuming an interrupted recording
+
+If a recording session exits early (crash, accidental stop, or a killed process) before all episodes are collected, you can continue into the **same** dataset with `--resume=true` rather than starting over.
+
+First, check how many episodes actually saved so you know how many are left. Read `total_episodes` from the dataset metadata:
+
+```bash
+cat ~/.cache/huggingface/lerobot/gigwegbe/first-dataset/meta/info.json | grep total_episodes
+```
+
+Then re-run the same record command with two changes: add `--resume=true`, add `--dataset.root`, and set `--dataset.num_episodes` to the number of episodes **remaining** (not the original total). If 12 of 50 saved, that's 38:
+
+```bash
+lerobot-record \
+  --robot.type=so101_follower \
+  --robot.port="$ROBOT_PORT" \
+  --robot.id="$ROBOT_ID" \
+  --teleop.type=so101_leader \
+  --teleop.port="$TELEOP_PORT" \
+  --teleop.id="$TELEOP_ID" \
+  --display_data=true \
+  --robot.cameras='{
+    "wrist": {
+      "type": "opencv",
+      "index_or_path": '"$CAMERA_GRIPPER"',
+      "width": 640,
+      "height": 480,
+      "fps": 30
+    },
+    "front": {
+      "type": "opencv",
+      "index_or_path": '"$CAMERA_EXTERNAL"',
+      "width": 640,
+      "height": 480,
+      "fps": 30
+    }
+  }' \
+  --dataset.repo_id=gigwegbe/first-dataset \
+  --dataset.root=~/.cache/huggingface/lerobot/gigwegbe/first-dataset \
+  --dataset.single_task="first dataset" \
+  --dataset.num_episodes=38 \
+  --dataset.fps=30 \
+  --dataset.reset_time_s=10 \
+  --dataset.push_to_hub=false \
+  --resume=true
+```
+
+Notes and gotchas:
+
+- **`--resume=true` is a top-level flag, not `--dataset.resume`.** (Older guides referencing `--control.resume=true` are from the deprecated `control_robot.py` era and don't apply to the current CLI.)
+- **`--dataset.num_episodes` means *additional* episodes when resuming**, not the target total. Set it to `50 − total_episodes`.
+- **`--dataset.root` is required to resume** a local dataset — without it the tool tries to fetch from the Hub.
+- **Episode indexing continues automatically** from the last saved index; it does not restart at 0.
+- **Everything else must match the original run** — same camera names, resolutions, fps, robot type, and id. On resume LeRobot runs a compatibility check and errors out on any mismatch (e.g. `Dataset metadata compatibility check failed`).
+- **Re-running *without* `--resume=true` raises `FileExistsError`** because the dataset directory already exists. That's expected — it won't append or overwrite. Just add the flag. Only delete the directory if you actually intend to start over.
+- **Known bug (GitHub issue #2049):** on lerobot 0.3.4 with dataset format v3.0, `--resume=true` can crash during video concatenation with a `time_base` / `Cannot access 'time_base' as a decoder` error. The same command works with resume off. Back up the dataset before resuming as cheap insurance:
+
+```bash
+cp -r ~/.cache/huggingface/lerobot/gigwegbe/first-dataset ~/first-dataset-backup
+```
+
+If you hit that crash, the fallback is to record the remaining episodes into a separate `repo_id` (e.g. `gigwegbe/first-dataset-part2`) and merge the two datasets afterward (merge requires identical features).
+
+## 8. Visualizing a recorded dataset
 
 ```bash
 lerobot-dataset-viz \
@@ -226,7 +289,7 @@ lerobot-dataset-viz \
 ls ~/.cache/huggingface/lerobot/gigwegbe/first-dataset/data/chunk-000/ | wc -l
 ```
 
-## 8. Async policy inference client (for reference)
+## 9. Async policy inference client (for reference)
 
 Used to run a remote policy server (e.g. Pi0.5 on a Mac) against the real robot over the network:
 
@@ -246,7 +309,7 @@ python -m lerobot.async_inference.robot_client \
 
 Note the camera key names differ from teleop/record (`left_wrist_0_rgb`, `right_wrist_0_rgb`, `base_0_rgb`) — these must match what the specific policy (Pi0.5 here) expects, not the generic `wrist`/`front` naming used elsewhere.
 
-## 9. Isaac Lab sim-side teleop and recording
+## 10. Isaac Lab sim-side teleop and recording
 
 The same leader arm can drive a simulated SO-101 in Isaac Lab instead of (or alongside) the real follower — useful for testing tasks in sim before running them on hardware.
 
@@ -268,7 +331,7 @@ Recording a sim dataset for a specific task (here, a vials-to-rack pick-and-plac
 
 Both commands run through `isaaclab.sh -p -m`, Isaac Lab's own Python module launcher, rather than the plain `lerobot-*` CLI entry points used for the real robot — the task name (`--task`) selects which registered Isaac Lab environment to load.
 
-## 10. Cleanup
+## 11. Cleanup
 
 If ports lock up, cameras won't reconnect, or a session hangs:
 
