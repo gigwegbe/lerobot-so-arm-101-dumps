@@ -75,6 +75,8 @@ export CAMERA_GRIPPER=2
 export CAMERA_EXTERNAL=4
 ```
 
+When running three cameras, one camera often fails to stream (`read failed (status=False)`) because all cameras default to YUYV (uncompressed), which saturates the shared USB bus. Forcing at least one camera to `fourcc: MJPG` (compressed) drops the bandwidth enough for all of them to run. See section 7 for the three-camera record command.
+
 ## 4. Teleoperation
 
 ```bash
@@ -208,7 +210,63 @@ Notes:
 - Each completed episode gets encoded with SVT-AV1 — the `Svt[info]` log lines after an episode ends are normal, not errors.
 - Hit a `ValueError: You must add one or several frames with add_frame before calling add_episode` crash once — caused by stopping (esc) right as a new, still-empty episode buffer opened. Earlier completed episodes remained safely saved; only the empty in-progress one failed. Lesson: let a couple of frames land (wait a beat after "Recording episode N" appears) before hitting the stop pedal, or stop during the reset window between episodes rather than mid-recording.
 
-## 7. Resuming an interrupted recording
+## 7. Recording with three cameras (USB bandwidth fix)
+
+Adding a third USB camera often makes one camera fail to stream — `read failed (status=False)` — even though `lerobot-find-cameras` detects it. The cause is USB bandwidth: all cameras default to YUYV (uncompressed), and three uncompressed 640x480@30 streams saturate a shared USB controller. The fix is to force at least the problem camera to `fourcc: MJPG` (motion-JPEG, compressed), which cuts its bandwidth enough for all three to run together. You can set MJPG on all cameras if needed.
+
+```bash
+export CAMERA_FRONT=4
+export CAMERA_EXTERNAL=2
+export CAMERA_WRIST=6
+
+lerobot-record \
+  --robot.type=so101_follower \
+  --robot.port="$ROBOT_PORT" \
+  --robot.id="$ROBOT_ID" \
+  --teleop.type=so101_leader \
+  --teleop.port="$TELEOP_PORT" \
+  --teleop.id="$TELEOP_ID" \
+  --display_data=true \
+  --robot.cameras='{
+    "wrist": {
+      "type": "opencv",
+      "index_or_path": '"$CAMERA_WRIST"',
+      "width": 640,
+      "height": 480,
+      "fps": 30
+    },
+    "front": {
+      "type": "opencv",
+      "index_or_path": '"$CAMERA_FRONT"',
+      "width": 640,
+      "height": 480,
+      "fps": 30,
+      "fourcc": "MJPG"
+    },
+    "top": {
+      "type": "opencv",
+      "index_or_path": '"$CAMERA_EXTERNAL"',
+      "width": 640,
+      "height": 480,
+      "fps": 30
+    }
+  }' \
+  --dataset.repo_id=gigwegbe/first-dataset \
+  --dataset.root=/home/george/.cache/huggingface/lerobot/gigwegbe/first-dataset \
+  --dataset.single_task="first dataset" \
+  --dataset.num_episodes=10 \
+  --dataset.fps=30 \
+  --dataset.reset_time_s=10 \
+  --dataset.push_to_hub=false
+```
+
+Notes:
+
+- Each camera needs a unique key. Here the three keys are `wrist`, `front`, and `top` — rename them to match your actual physical views.
+- Watch for trailing commas inside the camera JSON (e.g. a comma after the last field in a block). The `--robot.cameras` value is parsed as JSON and a trailing comma breaks the parse.
+- The number of cameras is part of the dataset's feature schema. You cannot add a third camera to a dataset that was started with two cameras and resume into it — the compatibility check will reject the mismatch. Start a fresh `repo_id` when changing the camera count.
+
+## 8. Resuming an interrupted recording
 
 If a recording session exits early (crash, accidental stop, or a killed process) before all episodes are collected, you can continue into the **same** dataset with `--resume=true` rather than starting over.
 
@@ -271,7 +329,7 @@ cp -r ~/.cache/huggingface/lerobot/gigwegbe/first-dataset ~/first-dataset-backup
 
 If you hit that crash, the fallback is to record the remaining episodes into a separate `repo_id` (e.g. `gigwegbe/first-dataset-part2`) and merge the two datasets afterward (merge requires identical features).
 
-## 8. Visualizing a recorded dataset
+## 9. Visualizing a recorded dataset
 
 ```bash
 lerobot-dataset-viz \
@@ -289,7 +347,7 @@ lerobot-dataset-viz \
 ls ~/.cache/huggingface/lerobot/gigwegbe/first-dataset/data/chunk-000/ | wc -l
 ```
 
-## 9. Async policy inference client (for reference)
+## 10. Async policy inference client (for reference)
 
 Used to run a remote policy server (e.g. Pi0.5 on a Mac) against the real robot over the network:
 
@@ -309,7 +367,7 @@ python -m lerobot.async_inference.robot_client \
 
 Note the camera key names differ from teleop/record (`left_wrist_0_rgb`, `right_wrist_0_rgb`, `base_0_rgb`) — these must match what the specific policy (Pi0.5 here) expects, not the generic `wrist`/`front` naming used elsewhere.
 
-## 10. Isaac Lab sim-side teleop and recording
+## 11. Isaac Lab sim-side teleop and recording
 
 The same leader arm can drive a simulated SO-101 in Isaac Lab instead of (or alongside) the real follower — useful for testing tasks in sim before running them on hardware.
 
@@ -331,7 +389,7 @@ Recording a sim dataset for a specific task (here, a vials-to-rack pick-and-plac
 
 Both commands run through `isaaclab.sh -p -m`, Isaac Lab's own Python module launcher, rather than the plain `lerobot-*` CLI entry points used for the real robot — the task name (`--task`) selects which registered Isaac Lab environment to load.
 
-## 11. Cleanup
+## 12. Cleanup
 
 If ports lock up, cameras won't reconnect, or a session hangs:
 
