@@ -347,7 +347,79 @@ lerobot-dataset-viz \
 ls ~/.cache/huggingface/lerobot/gigwegbe/first-dataset/data/chunk-000/ | wc -l
 ```
 
-## 10. Async policy inference client (for reference)
+## 10. Editing datasets (delete, split, merge, features)
+
+One CLI, `lerobot-edit-dataset`, handles most post-recording cleanup: deleting episodes, splitting into subsets, merging datasets, adding/removing features, and converting image datasets to video. Run `lerobot-edit-dataset --help` for the exact flags on your install — argument names drift between versions.
+
+For all of these on a local-only dataset, keep `--root` pointing at the dataset (and see the bug note at the end). The typical workflow is: record → visualize → delete bad episodes → train.
+
+**Delete episodes** — remove bad or empty episodes (e.g. the empty one from a crash):
+
+```bash
+lerobot-edit-dataset \
+  --repo_id gigwegbe/first-dataset \
+  --root /home/george/.cache/huggingface/lerobot/gigwegbe/first-dataset \
+  --operation.type delete_episodes \
+  --operation.episode_indices "[0, 2, 5]"
+```
+
+Add `--new_repo_id gigwegbe/first-dataset-cleaned` to write the result to a new dataset and leave the original untouched (safer).
+
+**Split a dataset** — by ratio or by explicit indices. Outputs are saved as separate datasets with the split name appended (e.g. `first-dataset_train`):
+
+```bash
+# by ratio
+lerobot-edit-dataset \
+  --repo_id gigwegbe/first-dataset \
+  --root /home/george/.cache/huggingface/lerobot/gigwegbe/first-dataset \
+  --operation.type split \
+  --operation.splits '{"train": 0.8, "val": 0.2}'
+
+# by explicit episode indices
+lerobot-edit-dataset \
+  --repo_id gigwegbe/first-dataset \
+  --root /home/george/.cache/huggingface/lerobot/gigwegbe/first-dataset \
+  --operation.type split \
+  --operation.splits '{"train": [0,1,2,3,4,5,6,7], "val": [8,9]}'
+```
+
+Split names are arbitrary. Note: most LeRobot training doesn't need a pre-split dataset — `lerobot-train` runs on the whole dataset and evaluation is usually done on the real robot. Split only if you specifically want a held-out offline eval set.
+
+**Merge datasets** — combine two or more into one. Requires identical features (same cameras/names/count/resolution, same fps, same robot type, same state/action dims):
+
+```bash
+lerobot-edit-dataset \
+  --repo_id gigwegbe/first-dataset-merged \
+  --operation.type merge \
+  --operation.repo_ids '["gigwegbe/first-dataset", "gigwegbe/first-dataset-part2"]'
+```
+
+The exact source-list flag (`--operation.repo_ids` vs `--operation.datasets`) varies by version — check `--help`. Merge is the main fallback for the resume crash (section 8): record the remaining episodes into a separate `repo_id` with the same config, then merge.
+
+**Add / remove features** — `--operation.type remove_features` strips a stream you no longer want (e.g. an unused camera) without re-recording; `add_features` injects computed rewards or embeddings for reward-model/RL training. **Convert to video** re-encodes an older image-format dataset into the compressed v3 video layout.
+
+**Known v3 bugs and the Python fallback.** On v3 datasets, delete/split/merge can crash with `ValueError: cannot convert float NaN to integer` (issue #2283), and deletion can fail specifically when `--root` is passed, during video re-encoding (issue #2316). Since these share the reindexing code path, they can hit any of these operations. Always back up first:
+
+```bash
+cp -r /home/george/.cache/huggingface/lerobot/gigwegbe/first-dataset ~/first-dataset-backup
+```
+
+If the CLI keeps crashing, the same operations exist as a Python API in `lerobot.datasets.dataset_tools` (`delete_episodes`, `split_dataset`, `merge_datasets`, `add_feature`, `remove_feature`), which often sidesteps the CLI bugs — load a `LeRobotDataset`, call the function, write to an `output_dir`:
+
+```python
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.datasets.dataset_tools import delete_episodes
+
+dataset = LeRobotDataset("gigwegbe/first-dataset")
+cleaned = delete_episodes(
+    dataset,
+    episode_indices=[0, 2, 5],
+    output_dir="./data/cleaned",
+    repo_id="gigwegbe/first-dataset-cleaned",
+)
+```
+
+## 11. Async policy inference client (for reference)
 
 Used to run a remote policy server (e.g. Pi0.5 on a Mac) against the real robot over the network:
 
@@ -367,7 +439,7 @@ python -m lerobot.async_inference.robot_client \
 
 Note the camera key names differ from teleop/record (`left_wrist_0_rgb`, `right_wrist_0_rgb`, `base_0_rgb`) — these must match what the specific policy (Pi0.5 here) expects, not the generic `wrist`/`front` naming used elsewhere.
 
-## 11. Isaac Lab sim-side teleop and recording
+## 12. Isaac Lab sim-side teleop and recording
 
 The same leader arm can drive a simulated SO-101 in Isaac Lab instead of (or alongside) the real follower — useful for testing tasks in sim before running them on hardware.
 
@@ -389,7 +461,7 @@ Recording a sim dataset for a specific task (here, a vials-to-rack pick-and-plac
 
 Both commands run through `isaaclab.sh -p -m`, Isaac Lab's own Python module launcher, rather than the plain `lerobot-*` CLI entry points used for the real robot — the task name (`--task`) selects which registered Isaac Lab environment to load.
 
-## 12. Cleanup
+## 13. Cleanup
 
 If ports lock up, cameras won't reconnect, or a session hangs:
 
