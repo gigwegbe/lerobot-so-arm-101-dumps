@@ -347,7 +347,33 @@ lerobot-dataset-viz \
 ls ~/.cache/huggingface/lerobot/gigwegbe/first-dataset/data/chunk-000/ | wc -l
 ```
 
-## 10. Showing terminal logs inside the Rerun window (source patch)
+## 10. Replaying an episode on the real robot
+
+`lerobot-replay` re-executes a recorded episode's joint positions on the follower arm — the arm physically moves through the recorded trajectory. This is different from `lerobot-dataset-viz` (section 9), which just plays back the recorded footage on screen. Use replay to test repeatability of the arm's motion; use dataset-viz to review the recorded video/plots.
+
+Replay only needs the follower arm — no leader, no cameras — because it just re-sends recorded joint positions:
+
+```bash
+lerobot-replay \
+  --robot.type=so101_follower \
+  --robot.port="$ROBOT_PORT" \
+  --robot.id="$ROBOT_ID" \
+  --dataset.repo_id=gigwegbe/first-dataset \
+  --dataset.root=/home/george/.cache/huggingface/lerobot/gigwegbe/first-dataset \
+  --dataset.episode=3
+```
+
+**Safety:** clear the workspace and keep a hand near the power/E-stop before running. The arm executes the recorded trajectory on its own, regardless of what's currently in front of it — if the scene isn't reset to its recording-time state, it can collide with anything out of place.
+
+Notes and gotchas:
+
+- **`lerobot-replay` has no `--display_data` flag.** Passing it errors with `unrecognized arguments: --display_data=true`. Replay doesn't open a Rerun window.
+- **`--robot.cameras` is accepted but pointless for replay** — since there's no display, attaching cameras just initializes them for no visible benefit and adds parsing fragility. Leave the camera block out for a clean replay.
+- **`--dataset.root` is still needed** for a local-only dataset so it doesn't try the Hub.
+- **`--dataset.episode` (singular) picks the episode**; it can replay any episode from any LeRobot dataset, not just your own.
+- **Watch copy-paste line scrambles.** A mangled multi-line paste once glued `--dataset.episode=3` onto the `--dataset.root` path (`--dataset.episode=3e/george/.cache/...`), which dropped `--dataset.root` and threw a misleading downstream error (`Couldn't find a choice class for 'opencv'`). If you see a camera/parser error that doesn't match your actual config, check the `--dataset.*` lines are intact and correctly ordered first.
+
+## 11. Showing terminal logs inside the Rerun window (source patch)
 
 By default the live Rerun viewer (`--display_data=true`) shows the camera feeds and the state/action plots, but LeRobot's terminal messages — `Recording episode N`, `Reset the environment`, `Stop recording` — only go to the terminal. A small patch routes Python's logging into Rerun as a time-synced Text Log panel, so those messages appear in the viewer alongside the footage and you can scrub the timeline to see which log line lines up with which frame.
 
@@ -383,7 +409,7 @@ Notes:
 - The `if not any(...)` guard avoids attaching a duplicate handler if `init_rerun` runs twice in one process.
 - Because this edits the source tree, keep it as a `.patch` file or a local commit so a future `git pull` doesn't silently clobber it. Undo with `git checkout src/lerobot/utils/visualization_utils.py`.
 
-## 11. Editing datasets (delete, split, merge, features)
+## 12. Editing datasets (delete, split, merge, features)
 
 One CLI, `lerobot-edit-dataset`, handles most post-recording cleanup: deleting episodes, splitting into subsets, merging datasets, adding/removing features, and converting image datasets to video. Run `lerobot-edit-dataset --help` for the exact flags on your install — argument names drift between versions.
 
@@ -455,7 +481,7 @@ cleaned = delete_episodes(
 )
 ```
 
-## 12. Async policy inference client (for reference)
+## 13. Async policy inference client (for reference)
 
 Used to run a remote policy server (e.g. Pi0.5 on a Mac) against the real robot over the network:
 
@@ -475,7 +501,7 @@ python -m lerobot.async_inference.robot_client \
 
 Note the camera key names differ from teleop/record (`left_wrist_0_rgb`, `right_wrist_0_rgb`, `base_0_rgb`) — these must match what the specific policy (Pi0.5 here) expects, not the generic `wrist`/`front` naming used elsewhere.
 
-## 13. Isaac Lab sim-side teleop and recording
+## 14. Isaac Lab sim-side teleop and recording
 
 The same leader arm can drive a simulated SO-101 in Isaac Lab instead of (or alongside) the real follower — useful for testing tasks in sim before running them on hardware.
 
@@ -497,7 +523,7 @@ Recording a sim dataset for a specific task (here, a vials-to-rack pick-and-plac
 
 Both commands run through `isaaclab.sh -p -m`, Isaac Lab's own Python module launcher, rather than the plain `lerobot-*` CLI entry points used for the real robot — the task name (`--task`) selects which registered Isaac Lab environment to load.
 
-## 14. Cleanup
+## 15. Cleanup
 
 If ports lock up, cameras won't reconnect, or a session hangs:
 

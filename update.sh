@@ -45,3 +45,14 @@ lerobot-record \
   --dataset.reset_time_s=10 \
   --dataset.push_to_hub=false \
   --resume=true
+
+
+
+# without the camera
+  lerobot-replay \
+  --robot.type=so101_follower \
+  --robot.port="$ROBOT_PORT" \
+  --robot.id="$ROBOT_ID" \
+  --dataset.repo_id=gigwegbe/first-dataset \
+  --dataset.root=/home/george/.cache/huggingface/lerobot/gigwegbe/first-dataset \
+  --dataset.episode=3
