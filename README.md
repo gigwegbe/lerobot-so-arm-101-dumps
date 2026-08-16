@@ -347,7 +347,43 @@ lerobot-dataset-viz \
 ls ~/.cache/huggingface/lerobot/gigwegbe/first-dataset/data/chunk-000/ | wc -l
 ```
 
-## 10. Editing datasets (delete, split, merge, features)
+## 10. Showing terminal logs inside the Rerun window (source patch)
+
+By default the live Rerun viewer (`--display_data=true`) shows the camera feeds and the state/action plots, but LeRobot's terminal messages — `Recording episode N`, `Reset the environment`, `Stop recording` — only go to the terminal. A small patch routes Python's logging into Rerun as a time-synced Text Log panel, so those messages appear in the viewer alongside the footage and you can scrub the timeline to see which log line lines up with which frame.
+
+![Rerun viewer showing the logs panel with time-synced episode/reset messages](assets/rerun-logs-panel.png)
+
+Rerun provides a logging handler (`rr.LoggingHandler`) that forwards standard Python `logging` records into the viewer as `TextLog` entries. LeRobot inits Rerun but doesn't attach this handler, so we add it in `init_rerun`.
+
+Edit `src/lerobot/utils/visualization_utils.py`: add `import logging` at the top, then append the handler block at the end of `init_rerun`:
+
+```python
+def init_rerun(session_name: str = "lerobot_control_loop") -> None:
+    """Initializes the Rerun SDK for visualizing the control loop."""
+    batch_size = os.getenv("RERUN_FLUSH_NUM_BYTES", "8000")
+    os.environ["RERUN_FLUSH_NUM_BYTES"] = batch_size
+    rr.init(session_name)
+    memory_limit = os.getenv("LEROBOT_RERUN_MEMORY_LIMIT", "10%")
+    rr.spawn(memory_limit=memory_limit)
+
+    # Route Python logging into the Rerun viewer as a time-synced TextLog panel.
+    # Lets you see "Recording episode N" / "Reset the environment" etc. inside Rerun.
+    root_logger = logging.getLogger()
+    if not any(isinstance(h, rr.LoggingHandler) for h in root_logger.handlers):
+        rerun_handler = rr.LoggingHandler("logs")
+        rerun_handler.setLevel(logging.INFO)
+        root_logger.addHandler(rerun_handler)
+```
+
+Notes:
+
+- LeRobot is installed editable (`pip install -e .` — check for `__editable__.lerobot-*.pth` in site-packages), so no wheel rebuild is needed: edit, save, re-run.
+- After recording, the messages show up under a `logs/` entity in the Rerun streams panel (with sub-loggers like `camera_opencv`, `so101_follower`, `so101_leader`, `utils`). Open it as a Text Log view.
+- Only messages that go through Python `logging` appear — anything using bare `print` or `log_say` audio cues won't show.
+- The `if not any(...)` guard avoids attaching a duplicate handler if `init_rerun` runs twice in one process.
+- Because this edits the source tree, keep it as a `.patch` file or a local commit so a future `git pull` doesn't silently clobber it. Undo with `git checkout src/lerobot/utils/visualization_utils.py`.
+
+## 11. Editing datasets (delete, split, merge, features)
 
 One CLI, `lerobot-edit-dataset`, handles most post-recording cleanup: deleting episodes, splitting into subsets, merging datasets, adding/removing features, and converting image datasets to video. Run `lerobot-edit-dataset --help` for the exact flags on your install — argument names drift between versions.
 
@@ -419,7 +455,7 @@ cleaned = delete_episodes(
 )
 ```
 
-## 11. Async policy inference client (for reference)
+## 12. Async policy inference client (for reference)
 
 Used to run a remote policy server (e.g. Pi0.5 on a Mac) against the real robot over the network:
 
@@ -439,7 +475,7 @@ python -m lerobot.async_inference.robot_client \
 
 Note the camera key names differ from teleop/record (`left_wrist_0_rgb`, `right_wrist_0_rgb`, `base_0_rgb`) — these must match what the specific policy (Pi0.5 here) expects, not the generic `wrist`/`front` naming used elsewhere.
 
-## 12. Isaac Lab sim-side teleop and recording
+## 13. Isaac Lab sim-side teleop and recording
 
 The same leader arm can drive a simulated SO-101 in Isaac Lab instead of (or alongside) the real follower — useful for testing tasks in sim before running them on hardware.
 
@@ -461,7 +497,7 @@ Recording a sim dataset for a specific task (here, a vials-to-rack pick-and-plac
 
 Both commands run through `isaaclab.sh -p -m`, Isaac Lab's own Python module launcher, rather than the plain `lerobot-*` CLI entry points used for the real robot — the task name (`--task`) selects which registered Isaac Lab environment to load.
 
-## 13. Cleanup
+## 14. Cleanup
 
 If ports lock up, cameras won't reconnect, or a session hangs:
 

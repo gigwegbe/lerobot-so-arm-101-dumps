@@ -43,4 +43,5 @@ lerobot-record \
   --dataset.num_episodes=10 \
   --dataset.fps=30 \
   --dataset.reset_time_s=10 \
-  --dataset.push_to_hub=false 
+  --dataset.push_to_hub=false \
+  --resume=true
