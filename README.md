@@ -419,7 +419,7 @@ Notes and gotchas:
 
 By default the live Rerun viewer (`--display_data=true`) shows the camera feeds and the state/action plots, but LeRobot's terminal messages — `Recording episode N`, `Reset the environment`, `Stop recording` — only go to the terminal. A small patch routes Python's logging into Rerun as a time-synced Text Log panel, so those messages appear in the viewer alongside the footage and you can scrub the timeline to see which log line lines up with which frame.
 
-![Rerun viewer showing the logs panel with time-synced episode/reset messages](img/rerun-logs-panel.png)
+![Rerun viewer showing the logs panel with time-synced episode/reset messages](assets/rerun-logs-panel.png)
 
 Rerun provides a logging handler (`rr.LoggingHandler`) that forwards standard Python `logging` records into the viewer as `TextLog` entries. LeRobot inits Rerun but doesn't attach this handler, so we add it in `init_rerun`.
 
