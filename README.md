@@ -75,7 +75,7 @@ export CAMERA_GRIPPER=2
 export CAMERA_EXTERNAL=4
 ```
 
-When running three cameras, one camera often fails to stream (`read failed (status=False)`) because all cameras default to YUYV (uncompressed), which saturates the shared USB bus. Forcing at least one camera to `fourcc: MJPG` (compressed) drops the bandwidth enough for all of them to run. See section 7 for the three-camera record command.
+When running three cameras, one camera often fails to stream (`read failed (status=False)`) because all cameras default to YUYV (uncompressed), which saturates the shared USB bus. Forcing at least one camera to `fourcc: MJPG` (compressed) drops the bandwidth enough for all of them to run. See section 8 for the three-camera record command.
 
 ## 4. Teleoperation
 
@@ -118,7 +118,43 @@ ps aux | grep lerobot   # to inspect before killing, if needed
 
 - To exit teleoperate cleanly: **Ctrl+C** in the terminal. This lets LeRobot disable torque and release the camera/serial handles properly — closing the terminal window instead can leave the port locked.
 
-## 5. Hands-free episode control with a foot pedal
+## 5. PID tuning for smooth motion
+
+If the follower is jolting or jittery when tracking the leader, tune the servos' position-loop PID gains. The Feetech STS3215 servos each run an internal P/I/D loop; this fork exposes the gains as CLI flags on the follower, so no file edits or register writes are needed — just add them to the teleop (or record) command.
+
+```bash
+lerobot-teleoperate \
+  --robot.type=so101_follower \
+  --robot.port="$ROBOT_PORT" \
+  --robot.id="$ROBOT_ID" \
+  --teleop.type=so101_leader \
+  --teleop.port="$TELEOP_PORT" \
+  --teleop.id="$TELEOP_ID" \
+  --robot.p_coefficient=8 \
+  --robot.i_coefficient=0 \
+  --robot.d_coefficient=20 \
+  --display_data=true \
+  --robot.cameras='{ ... }'
+```
+
+Defaults: `p_coefficient=8`, `i_coefficient=0`, `d_coefficient=20`.
+
+What each gain does:
+
+- **`p_coefficient`** (proportional / stiffness) — lower = smoother but less responsive; higher = more responsive but potentially jittery. If the arm is jittery, lower P; if it feels soft or laggy, raise it.
+- **`d_coefficient`** (derivative / damping) — lower = less damping; higher = more damping but too much causes its own oscillation. Add D to smooth overshoot after setting P.
+- **`i_coefficient`** (integral) — usually left at 0 for position control. Only raise it slightly if a joint consistently settles a little off-target under load.
+
+Tuning loop: start at defaults, change one gain at a time, re-run, feel the result. If jittery, drop `p_coefficient` a couple of points (8 → 6 → 4) until smooth; if that makes it too soft, nudge P back up and adjust `d_coefficient` instead.
+
+Notes:
+
+- **Follower only.** In normal leader-follower teleop you tune only the follower — the leader runs backdriven (torque off) with no position loop to tune, so it has no equivalent `teleop.p_coefficient`. The leader would only have gains to tune in a motorized/force-feedback setup, which isn't the standard config.
+- These are CLI flags, so nothing persists to the servo EEPROM — gains are applied at connect time each run and revert simply by dropping the flag.
+- The gains here are global (applied to all follower motors at once), so you're tuning the whole arm's feel, not individual joints.
+- This flag interface is specific to the customized training fork (gains defined as fields in `config_so101_follower.py`). On stock LeRobot these flags won't exist; you'd instead write the `P_Coefficient`/`I_Coefficient`/`D_Coefficient` servo registers directly via a `FeetechMotorsBus` script.
+
+## 6. Hands-free episode control with a foot pedal
 
 Used a generic 3-button PCsensor USB foot pedal (shows up as a standard HID keyboard, no drivers needed) to drive `lerobot-record` without touching the keyboard.
 
@@ -168,7 +204,7 @@ Usage during recording:
 
 If a pedal seems to do the wrong thing, re-check `footswitch -r` first (confirm the firmware mapping didn't revert) before assuming a physical mix-up between pedal positions.
 
-## 6. Recording a dataset
+## 7. Recording a dataset
 
 ```bash
 lerobot-record \
@@ -203,14 +239,20 @@ lerobot-record \
   --dataset.push_to_hub=false
 ```
 
+Keyboard controls during recording (these are the keys the foot pedal in section 6 maps to):
+
+- **Right Arrow (→)** — early stop the current episode / reset period. Accepts the episode and moves on to the next one.
+- **Left Arrow (←)** — cancel and re-record the current episode. Discards it and restarts.
+- **ESC** — end the entire recording session early. Stops the session, encodes videos, and finalizes the dataset.
+
 Notes:
 
 - `--dataset.push_to_hub=false` keeps the dataset local only (at `~/.cache/huggingface/lerobot/<repo_id>`), since `lerobot-record` pushes to the Hub by default otherwise.
 - `--dataset.reset_time_s` gives a pause between episodes to reset the scene before the next one starts recording automatically.
 - Each completed episode gets encoded with SVT-AV1 — the `Svt[info]` log lines after an episode ends are normal, not errors.
-- Hit a `ValueError: You must add one or several frames with add_frame before calling add_episode` crash once — caused by stopping (esc) right as a new, still-empty episode buffer opened. Earlier completed episodes remained safely saved; only the empty in-progress one failed. Lesson: let a couple of frames land (wait a beat after "Recording episode N" appears) before hitting the stop pedal, or stop during the reset window between episodes rather than mid-recording.
+- Hit a `ValueError: You must add one or several frames with add_frame before calling add_episode` crash once — caused by stopping (esc) right as a new, still-empty episode buffer opened. Earlier completed episodes remained safely saved; only the empty in-progress one failed. Lesson: let a couple of frames land (wait a beat after "Recording episode N" appears) before hitting the stop pedal, or stop during the reset window between episodes rather than mid-recording. In other words, don't hit ESC in the split-second a fresh episode opens.
 
-## 7. Recording with three cameras (USB bandwidth fix)
+## 8. Recording with three cameras (USB bandwidth fix)
 
 Adding a third USB camera often makes one camera fail to stream — `read failed (status=False)` — even though `lerobot-find-cameras` detects it. The cause is USB bandwidth: all cameras default to YUYV (uncompressed), and three uncompressed 640x480@30 streams saturate a shared USB controller. The fix is to force at least the problem camera to `fourcc: MJPG` (motion-JPEG, compressed), which cuts its bandwidth enough for all three to run together. You can set MJPG on all cameras if needed.
 
@@ -266,7 +308,7 @@ Notes:
 - Watch for trailing commas inside the camera JSON (e.g. a comma after the last field in a block). The `--robot.cameras` value is parsed as JSON and a trailing comma breaks the parse.
 - The number of cameras is part of the dataset's feature schema. You cannot add a third camera to a dataset that was started with two cameras and resume into it — the compatibility check will reject the mismatch. Start a fresh `repo_id` when changing the camera count.
 
-## 8. Resuming an interrupted recording
+## 9. Resuming an interrupted recording
 
 If a recording session exits early (crash, accidental stop, or a killed process) before all episodes are collected, you can continue into the **same** dataset with `--resume=true` rather than starting over.
 
@@ -329,7 +371,7 @@ cp -r ~/.cache/huggingface/lerobot/gigwegbe/first-dataset ~/first-dataset-backup
 
 If you hit that crash, the fallback is to record the remaining episodes into a separate `repo_id` (e.g. `gigwegbe/first-dataset-part2`) and merge the two datasets afterward (merge requires identical features).
 
-## 9. Visualizing a recorded dataset
+## 10. Visualizing a recorded dataset
 
 ```bash
 lerobot-dataset-viz \
@@ -347,9 +389,9 @@ lerobot-dataset-viz \
 ls ~/.cache/huggingface/lerobot/gigwegbe/first-dataset/data/chunk-000/ | wc -l
 ```
 
-## 10. Replaying an episode on the real robot
+## 11. Replaying an episode on the real robot
 
-`lerobot-replay` re-executes a recorded episode's joint positions on the follower arm — the arm physically moves through the recorded trajectory. This is different from `lerobot-dataset-viz` (section 9), which just plays back the recorded footage on screen. Use replay to test repeatability of the arm's motion; use dataset-viz to review the recorded video/plots.
+`lerobot-replay` re-executes a recorded episode's joint positions on the follower arm — the arm physically moves through the recorded trajectory. This is different from `lerobot-dataset-viz` (section 10), which just plays back the recorded footage on screen. Use replay to test repeatability of the arm's motion; use dataset-viz to review the recorded video/plots.
 
 Replay only needs the follower arm — no leader, no cameras — because it just re-sends recorded joint positions:
 
@@ -373,11 +415,11 @@ Notes and gotchas:
 - **`--dataset.episode` (singular) picks the episode**; it can replay any episode from any LeRobot dataset, not just your own.
 - **Watch copy-paste line scrambles.** A mangled multi-line paste once glued `--dataset.episode=3` onto the `--dataset.root` path (`--dataset.episode=3e/george/.cache/...`), which dropped `--dataset.root` and threw a misleading downstream error (`Couldn't find a choice class for 'opencv'`). If you see a camera/parser error that doesn't match your actual config, check the `--dataset.*` lines are intact and correctly ordered first.
 
-## 11. Showing terminal logs inside the Rerun window (source patch)
+## 12. Showing terminal logs inside the Rerun window (source patch)
 
 By default the live Rerun viewer (`--display_data=true`) shows the camera feeds and the state/action plots, but LeRobot's terminal messages — `Recording episode N`, `Reset the environment`, `Stop recording` — only go to the terminal. A small patch routes Python's logging into Rerun as a time-synced Text Log panel, so those messages appear in the viewer alongside the footage and you can scrub the timeline to see which log line lines up with which frame.
 
-![Rerun viewer showing the logs panel with time-synced episode/reset messages](assets/rerun-logs-panel.png)
+![Rerun viewer showing the logs panel with time-synced episode/reset messages](img/rerun-logs-panel.png)
 
 Rerun provides a logging handler (`rr.LoggingHandler`) that forwards standard Python `logging` records into the viewer as `TextLog` entries. LeRobot inits Rerun but doesn't attach this handler, so we add it in `init_rerun`.
 
@@ -409,7 +451,7 @@ Notes:
 - The `if not any(...)` guard avoids attaching a duplicate handler if `init_rerun` runs twice in one process.
 - Because this edits the source tree, keep it as a `.patch` file or a local commit so a future `git pull` doesn't silently clobber it. Undo with `git checkout src/lerobot/utils/visualization_utils.py`.
 
-## 12. Editing datasets (delete, split, merge, features)
+## 13. Editing datasets (delete, split, merge, features)
 
 One CLI, `lerobot-edit-dataset`, handles most post-recording cleanup: deleting episodes, splitting into subsets, merging datasets, adding/removing features, and converting image datasets to video. Run `lerobot-edit-dataset --help` for the exact flags on your install — argument names drift between versions.
 
@@ -456,7 +498,7 @@ lerobot-edit-dataset \
   --operation.repo_ids '["gigwegbe/first-dataset", "gigwegbe/first-dataset-part2"]'
 ```
 
-The exact source-list flag (`--operation.repo_ids` vs `--operation.datasets`) varies by version — check `--help`. Merge is the main fallback for the resume crash (section 8): record the remaining episodes into a separate `repo_id` with the same config, then merge.
+The exact source-list flag (`--operation.repo_ids` vs `--operation.datasets`) varies by version — check `--help`. Merge is the main fallback for the resume crash (section 9): record the remaining episodes into a separate `repo_id` with the same config, then merge.
 
 **Add / remove features** — `--operation.type remove_features` strips a stream you no longer want (e.g. an unused camera) without re-recording; `add_features` injects computed rewards or embeddings for reward-model/RL training. **Convert to video** re-encodes an older image-format dataset into the compressed v3 video layout.
 
@@ -481,7 +523,7 @@ cleaned = delete_episodes(
 )
 ```
 
-## 13. Async policy inference client (for reference)
+## 14. Async policy inference client (for reference)
 
 Used to run a remote policy server (e.g. Pi0.5 on a Mac) against the real robot over the network:
 
@@ -501,7 +543,7 @@ python -m lerobot.async_inference.robot_client \
 
 Note the camera key names differ from teleop/record (`left_wrist_0_rgb`, `right_wrist_0_rgb`, `base_0_rgb`) — these must match what the specific policy (Pi0.5 here) expects, not the generic `wrist`/`front` naming used elsewhere.
 
-## 14. Isaac Lab sim-side teleop and recording
+## 15. Isaac Lab sim-side teleop and recording
 
 The same leader arm can drive a simulated SO-101 in Isaac Lab instead of (or alongside) the real follower — useful for testing tasks in sim before running them on hardware.
 
@@ -523,7 +565,7 @@ Recording a sim dataset for a specific task (here, a vials-to-rack pick-and-plac
 
 Both commands run through `isaaclab.sh -p -m`, Isaac Lab's own Python module launcher, rather than the plain `lerobot-*` CLI entry points used for the real robot — the task name (`--task`) selects which registered Isaac Lab environment to load.
 
-## 15. Cleanup
+## 16. Cleanup
 
 If ports lock up, cameras won't reconnect, or a session hangs:
 
